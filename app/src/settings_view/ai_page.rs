@@ -6309,6 +6309,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
+    anthropic_base_url_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
@@ -6326,6 +6327,7 @@ impl ApiKeysWidget {
             openai: openai_key,
             anthropic: anthropic_key,
             google: google_key,
+            anthropic_base_url: anthropic_base_url_value,
             ..
         } = ApiKeyManager::as_ref(ctx).keys().clone();
 
@@ -6414,9 +6416,75 @@ impl ApiKeysWidget {
             "AIzaSy..."
         );
 
+        // Meridian proxy URL editor — plain text (not a password field).
+        let anthropic_base_url_editor = ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                is_password: false,
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.monospace_font_family()),
+                    text_colors_override: Some(TextColors {
+                        default_color: appearance.theme().active_ui_text_color(),
+                        disabled_color: appearance.theme().disabled_ui_text_color(),
+                        hint_color: appearance.theme().disabled_ui_text_color(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("http://localhost:3456", ctx);
+            if let Some(url) = &anthropic_base_url_value {
+                editor.set_buffer_text(url, ctx);
+            }
+            editor
+        });
+        AISettingsPageView::update_editor_interaction_state(
+            anthropic_base_url_editor.clone(),
+            is_any_ai_enabled && is_byo_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&anthropic_base_url_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                let url = buffer_text.is_empty().not().then_some(buffer_text);
+                ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_anthropic_base_url(url, ctx);
+                });
+            }
+        });
+        let base_url_editor_clone = anthropic_base_url_editor.clone();
+        ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
+            if let UserWorkspacesEvent::TeamsChanged = event {
+                let is_any_ai_enabled =
+                    AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
+                let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled();
+                let is_enabled = is_any_ai_enabled && is_byo_enabled;
+                let has_url = !base_url_editor_clone.as_ref(ctx).is_empty(ctx);
+
+                if !is_byo_enabled && has_url {
+                    base_url_editor_clone.update(ctx, |editor, ctx| {
+                        editor.set_buffer_text("", ctx);
+                    });
+                    ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
+                        model.set_anthropic_base_url(None, ctx);
+                    });
+                }
+
+                AISettingsPageView::update_editor_interaction_state(
+                    base_url_editor_clone.clone(),
+                    is_enabled,
+                    ctx,
+                );
+                ctx.notify();
+            }
+        });
+
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
+            anthropic_base_url_editor,
             google_api_key_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
@@ -6497,6 +6565,13 @@ impl ApiKeysWidget {
             appearance,
             "Anthropic API Key",
             self.anthropic_api_key_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "Anthropic Proxy URL (Meridian / Claude Max)",
+            self.anthropic_base_url_editor.clone(),
             is_enabled,
             app,
         ));
@@ -6603,7 +6678,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt"
+        "api keys bring your own byo openai anthropic google claude gemini gpt meridian proxy claude max local"
     }
 
     fn render(

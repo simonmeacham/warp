@@ -22,6 +22,16 @@ pub struct ApiKeys {
     pub anthropic: Option<String>,
     pub openai: Option<String>,
     pub open_router: Option<String>,
+    /// Optional base URL override for the Anthropic API endpoint.
+    ///
+    /// When set, requests to Anthropic are routed through this URL instead
+    /// of the default `api.anthropic.com`. Intended for use with a locally
+    /// running Anthropic-compatible proxy such as Meridian, which bridges
+    /// the Claude Code SDK to the standard Anthropic API and allows use of
+    /// a Claude Max subscription with Warp's agent.
+    ///
+    /// Example: `http://localhost:3456`
+    pub anthropic_base_url: Option<String>,
 }
 
 impl ApiKeys {
@@ -30,6 +40,7 @@ impl ApiKeys {
             || self.anthropic.is_some()
             || self.google.is_some()
             || self.open_router.is_some()
+            || self.anthropic_base_url.is_some()
     }
 }
 
@@ -89,6 +100,16 @@ impl ApiKeyManager {
 
     pub fn set_open_router_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
         self.keys.open_router = key;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_anthropic_base_url(
+        &mut self,
+        url: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.anthropic_base_url = url;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -154,11 +175,17 @@ impl ApiKeyManager {
             })
             .flatten();
 
+        let anthropic_base_url = include_byo_keys
+            .then(|| self.keys.anthropic_base_url.clone())
+            .flatten()
+            .unwrap_or_default();
+
         if anthropic.is_empty()
             && openai.is_empty()
             && google.is_empty()
             && open_router.is_empty()
             && aws_credentials.is_none()
+            && anthropic_base_url.is_empty()
         {
             None
         } else {
@@ -169,6 +196,7 @@ impl ApiKeyManager {
                 open_router,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
+                anthropic_base_url,
             })
         }
     }
